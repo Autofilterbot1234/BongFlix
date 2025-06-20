@@ -1,6 +1,6 @@
 pyrogram
-tgcrypto
 pymongo
+Flask
 fuzzywuzzy
-flask
 python-Levenshtein
+tgcrypto
