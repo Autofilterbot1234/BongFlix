@@ -480,6 +480,15 @@ async def search(_, msg: Message):
     if not query:
         return
 
+    user_id = msg.from_user.id
+
+    # **NEW LOGIC ADDED HERE**
+    # If the user is an admin and is currently in the custom message sending process,
+    # skip the search function to allow handle_admin_custom_message to process it.
+    if user_id in ADMIN_IDS and user_id in custom_message_data:
+        print(f"DEBUG: Admin {user_id} is in custom message mode. Skipping search for message: '{query}'")
+        return # Skip this message from search
+
     if msg.chat.type == "group":
         if len(query) < 3:
             return
@@ -488,7 +497,6 @@ async def search(_, msg: Message):
         if not re.search(r'[a-zA-Z0-9]', query):
             return
 
-    user_id = msg.from_user.id
     users_col.update_one(
         {"_id": user_id},
         {"$set": {"last_query": query}, "$setOnInsert": {"joined": datetime.now(UTC), "favorite_movies": []}}, # favorite_movies যোগ করা হয়েছে
@@ -829,12 +837,16 @@ async def callback_handler(_, cq: CallbackQuery):
         print(f"DEBUG: custom_message_data set for admin {cq.from_user.id}: {custom_message_data[cq.from_user.id]}")
 
         # Edit the admin's original message to show that custom message is being handled
-        await cq.message.edit_reply_markup(
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✏️ কাস্টম মেসেজ পাঠানো হচ্ছে...", callback_data="noop")],
-                [InlineKeyboardButton("❌ বাতিল করুন", callback_data=f"cancel_custom_{user_id}_{encoded_query}_{original_admin_msg_id}")] # Pass original_admin_msg_id
-            ])
-        )
+        # Ensure cq.message is the message with the original buttons (usually it is)
+        try:
+            await cq.message.edit_reply_markup(
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("✏️ কাস্টম মেসেজ পাঠানো হচ্ছে...", callback_data="noop")],
+                    [InlineKeyboardButton("❌ বাতিল করুন", callback_data=f"cancel_custom_{user_id}_{encoded_query}_{original_admin_msg_id}")] # Pass original_admin_msg_id
+                ])
+            )
+        except Exception as e:
+            print(f"Error editing admin's original message markup: {e}")
 
         prompt_msg = await app.send_message(
             cq.from_user.id,
@@ -941,64 +953,81 @@ async def callback_handler(_, cq: CallbackQuery):
                 await cq.answer("অকার্যকর কলব্যাক ডেটা।", show_alert=True)
 
 
-@app.on_message(filters.user(ADMIN_IDS) & filters.private & filters.text & (lambda _, __, msg: not msg.text.startswith('/')))
+# Custom filter for messages meant for handle_admin_custom_message
+# This filter will only pass messages if the admin is *currently* expected to send a custom message.
+def custom_message_mode_filter(_, __, msg: Message):
+    admin_id = msg.from_user.id
+    # Check if the message is from an admin, is private, is text, is not a command,
+    # and if the admin is in the custom message data state.
+    is_admin = admin_id in ADMIN_IDS
+    is_private_chat = msg.chat.type == "private"
+    is_text = bool(msg.text)
+    is_not_command = not msg.text.startswith('/') if msg.text else True # Ensure it's not a command
+    
+    # Check if the admin is in the custom message flow
+    is_in_custom_message_flow = admin_id in custom_message_data and \
+                                admin_id in custom_message_prompts
+                                
+    return is_admin and is_private_chat and is_text and is_not_command and is_in_custom_message_flow
+
+@app.on_message(filters.create(custom_message_mode_filter))
 async def handle_admin_custom_message(_, msg: Message):
     admin_id = msg.from_user.id
     print(f"DEBUG: handle_admin_custom_message triggered for admin {admin_id}. Message: '{msg.text}'")
     print(f"DEBUG: custom_message_data for admin: {custom_message_data.get(admin_id)}")
     print(f"DEBUG: custom_message_prompts for admin: {custom_message_prompts.get(admin_id)}")
 
-    # Check if this admin was prompted to send a custom message
-    if admin_id in custom_message_data and admin_id in custom_message_prompts:
-        target_user_id = custom_message_data[admin_id]["target_user_id"]
-        original_query = custom_message_data[admin_id]["query"]
-        original_admin_msg_id = custom_message_data[admin_id]["original_admin_msg_id"]
+    # Retrieve data
+    custom_data = custom_message_data.get(admin_id)
+    if not custom_data:
+        # This should ideally not happen if filters work correctly, but as a safeguard.
+        print(f"DEBUG: Admin {admin_id} sent a message, but custom_message_data is missing. Ignoring.")
+        return
 
-        try:
-            # Send the custom message to the target user
-            sent_to_user = await app.send_message(
-                target_user_id,
-                f"✉️ এডমিনের পক্ষ থেকে মেসেজ:\n\n{msg.text}\n\n"
-                f"আপনার অনুসন্ধান: {original_query}"
-            )
-            asyncio.create_task(delete_message_later(sent_to_user.chat.id, sent_to_user.id))
+    target_user_id = custom_data["target_user_id"]
+    original_query = custom_data["query"]
+    original_admin_msg_id = custom_data["original_admin_msg_id"]
 
-            # Notify the admin
-            admin_confirmation_msg = await msg.reply(f"✅ মেসেজ সফলভাবে {target_user_id} ইউজারকে পাঠানো হয়েছে।")
-            asyncio.create_task(delete_message_later(admin_confirmation_msg.chat.id, admin_confirmation_msg.id))
-            
-            # Clean up the prompt message sent to admin
-            try:
-                prompt_msg_id = custom_message_prompts[admin_id]
-                await app.delete_messages(msg.chat.id, prompt_msg_id)
-            except Exception as e:
-                print(f"Error deleting admin prompt message: {e}")
+    try:
+        # Send the custom message to the target user
+        sent_to_user = await app.send_message(
+            target_user_id,
+            f"✉️ এডমিনের পক্ষ থেকে মেসেজ:\n\n{msg.text}\n\n"
+            f"আপনার অনুসন্ধান: {original_query}"
+        )
+        asyncio.create_task(delete_message_later(sent_to_user.chat.id, sent_to_user.id))
 
-            # Update the original admin's 'no result' message buttons
-            admin_btns_final = InlineKeyboardMarkup([
-                [InlineKeyboardButton(f"✅ উত্তর দেওয়া হয়েছে: কাস্টম মেসেজ", callback_data="noop")]
-            ])
-            try:
-                await app.edit_message_reply_markup(
-                    chat_id=msg.chat.id, # Admin's chat ID
-                    message_id=original_admin_msg_id, # Use the stored original admin message ID
-                    reply_markup=admin_btns_final
-                )
-            except Exception as e:
-                print(f"Error updating original admin message markup: {e}")
-
-        except Exception as e:
-            error_reply = await msg.reply(f"❌ ইউজারকে মেসেজ পাঠাতে সমস্যা হয়েছে: {e}")
-            asyncio.create_task(delete_message_later(error_reply.chat.id, error_reply.id))
+        # Notify the admin
+        admin_confirmation_msg = await msg.reply(f"✅ মেসেজ সফলভাবে {target_user_id} ইউজারকে পাঠানো হয়েছে।")
+        asyncio.create_task(delete_message_later(admin_confirmation_msg.chat.id, admin_confirmation_msg.id))
         
-        # Remove temporary data regardless of success or failure
-        custom_message_data.pop(admin_id, None)
-        custom_message_prompts.pop(admin_id, None)
-    else:
-        print(f"DEBUG: Admin {admin_id} sent a text message, but not in a custom message context. Ignoring.")
-        # Optionally, you can add a generic response here if you want to acknowledge other admin messages
-        # generic_ack = await msg.reply("এই মেসেজটি কোনো কাস্টম মেসেজ প্রম্পট এর অংশ নয়।")
-        # asyncio.create_task(delete_message_later(generic_ack.chat.id, generic_ack.id, delay=10))
+        # Clean up the prompt message sent to admin
+        try:
+            prompt_msg_id = custom_message_prompts[admin_id]
+            await app.delete_messages(msg.chat.id, prompt_msg_id)
+        except Exception as e:
+            print(f"Error deleting admin prompt message: {e}")
+        
+        # Update the original admin's 'no result' message buttons
+        admin_btns_final = InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"✅ উত্তর দেওয়া হয়েছে: কাস্টম মেসেজ", callback_data="noop")]
+        ])
+        try:
+            await app.edit_message_reply_markup(
+                chat_id=msg.chat.id, # Admin's chat ID
+                message_id=original_admin_msg_id, # Use the stored original admin message ID
+                reply_markup=admin_btns_final
+            )
+        except Exception as e:
+            print(f"Error updating original admin message markup: {e}")
+
+    except Exception as e:
+        error_reply = await msg.reply(f"❌ ইউজারকে মেসেজ পাঠাতে সমস্যা হয়েছে: {e}")
+        asyncio.create_task(delete_message_later(error_reply.chat.id, error_reply.id))
+    
+    # Remove temporary data regardless of success or failure
+    custom_message_data.pop(admin_id, None)
+    custom_message_prompts.pop(admin_id, None)
 
 
 if __name__ == "__main__":
