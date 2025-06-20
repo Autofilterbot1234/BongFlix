@@ -369,8 +369,12 @@ async def popular_movies(_, msg: Message):
                 user_id = msg.from_user.id
                 user_data = users_col.find_one({"_id": user_id})
                 is_favorited = movie["message_id"] in user_data.get("favorite_movies", []) if user_data else False
-                favorite_button_text = "❌ ফেভারিট থেকে সরান" if is_favorited else "⭐ ফেভারিটে যোগ করুন"
-                favorite_callback_data = f"toggle_favorite_{movie['message_id']}"
+
+                favorite_button_row = []
+                if is_favorited:
+                    favorite_button_row.append(InlineKeyboardButton("❌ ফেভারিট থেকে সরান", callback_data=f"toggle_favorite_{movie['message_id']}"))
+                else:
+                    favorite_button_row.append(InlineKeyboardButton("⭐ ফেভারিটে যোগ করুন", callback_data=f"toggle_favorite_{movie['message_id']}"))
 
                 buttons.append([
                     InlineKeyboardButton(
@@ -378,9 +382,7 @@ async def popular_movies(_, msg: Message):
                         url=f"https://t.me/{app.me.username}?start=watch_{movie['message_id']}"
                     )
                 ])
-                buttons.append([
-                    InlineKeyboardButton(favorite_button_text, callback_data=favorite_callback_data)
-                ])
+                buttons.append(favorite_button_row)
 
 
         reply_markup = InlineKeyboardMarkup(buttons)
@@ -960,7 +962,7 @@ async def callback_handler(_, cq: CallbackQuery):
                 await cq.answer("অকার্যকর কলব্যাক ডেটা।", show_alert=True)
 
 # This handler will now only process messages that are replies to specific prompt messages
-@app.on_message(filters.private & filters.user(ADMIN_IDS) & filters.reply & filters.text & ~filters.command)
+@app.on_message(filters.private & filters.user(ADMIN_IDS) & filters.reply & filters.text & ~filters.command()) # <-- এখানে `filters.command()` করা হয়েছে
 async def handle_admin_custom_message(_, msg: Message):
     admin_id = msg.from_user.id
     
