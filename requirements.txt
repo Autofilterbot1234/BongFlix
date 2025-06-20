@@ -4,3 +4,4 @@ fuzzywuzzy
 python-Levenshtein
 flask
 requests
+TgCrypto
