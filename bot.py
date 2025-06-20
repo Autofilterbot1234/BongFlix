@@ -311,7 +311,7 @@ async def delete_specific_movie(_, msg: Message):
 
     if movie_to_delete:
         movies_col.delete_one({"_id": movie_to_delete["_id"]})
-        reply_msg = await msg.reply(f"মুভি **{movie_to_delete['title']}** সফলভাবে ডিলিট করা হয়েছে।")
+        reply_msg = await msg.reply(f"মুভি **{movie_to_to_delete['title']}** সফলভাবে ডিলিট করা হয়েছে।")
         asyncio.create_task(delete_message_later(reply_msg.chat.id, reply_msg.id))
     else:
         error_msg = await msg.reply(f"**{movie_title_to_delete}** নামের কোনো মুভি খুঁজে পাওয়া যায়নি।")
@@ -928,11 +928,9 @@ async def callback_handler(_, cq: CallbackQuery):
                     print(f"Error sending admin feedback message: {e}")
             else:
                 await cq.answer("অকার্যকর কলব্যাক ডেটা।", show_alert=True)
-        else:
-            await cq.answer("অকার্যকর কলব্যাক ডেটা।", show_alert=True)
 
 
-@app.on_message(filters.user(ADMIN_IDS) & filters.private & ~filters.command)
+@app.on_message(filters.user(ADMIN_IDS) & filters.private & filters.text & ~filters.me & ~filters.regex(r"^\/"))
 async def handle_admin_custom_message(_, msg: Message):
     # Check if this admin was prompted to send a custom message
     if msg.from_user.id in custom_message_data and msg.from_user.id in custom_message_prompts:
