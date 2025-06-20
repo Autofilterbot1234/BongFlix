@@ -3,3 +3,4 @@ tgcrypto
 pymongo
 fuzzywuzzy
 flask
+python-Levenshtein
