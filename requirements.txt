@@ -1,7 +1,5 @@
 pyrogram
+tgcrypto
 pymongo
 fuzzywuzzy
-python-Levenshtein
 flask
-requests
-TgCrypto
