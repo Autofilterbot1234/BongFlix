@@ -1,5 +1,5 @@
 from pyrogram import Client, filters
-from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, ForceReply
 from pymongo import MongoClient, ASCENDING
 from pymongo.errors import OperationFailure, CollectionInvalid, DuplicateKeyError
 from flask import Flask
@@ -852,16 +852,26 @@ async def callback_handler(_, cq: CallbackQuery):
         # Send a force_reply message to the admin
         prompt_msg = await app.send_message(
             admin_id,
-            f"✏️ অনুগ্রহ করে {user_id} ইউজারকে পাঠানোর জন্য আপনার কাস্টম মেসেজটি লিখুন। এই মেসেজের *রিপ্লাই* দিন:",
-            reply_markup=InlineKeyboardMarkup([ # Optional: Add a cancel button here
-                [InlineKeyboardButton("❌ বাতিল করুন", callback_data=f"cancel_custom_{user_id}_{encoded_query}_{original_admin_msg_id}")]
-            ]),
-            reply_markup=filters.ForceReply(selective=True) # THIS IS THE KEY CHANGE
+            f"✏️ অনুগ্রহ করে {user_id} ইউজারকে পাঠানোর জন্য আপনার কাস্টম মেসেজটি লিখুন। *এই মেসেজের রিপ্লাই দিন:*" ,
+            reply_markup=ForceReply(selective=True) # THIS IS THE KEY CHANGE
         )
 
         custom_message_prompts[admin_id] = prompt_msg.id
         print(f"DEBUG: custom_message_prompts set for admin {admin_id}: {custom_message_prompts[admin_id]}")
         await cq.answer("কাস্টম মেসেজ লেখার জন্য অপেক্ষা করছি...", show_alert=True)
+
+        # Optionally, send a separate message with the cancel button immediately after the force_reply
+        # This gives the admin a visual button to click for cancellation, as force_reply doesn't support inline buttons
+        cancel_prompt_msg = await app.send_message(
+            admin_id,
+            "আপনি চাইলে এই প্রক্রিয়াটি বাতিল করতে পারেন।",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("❌ বাতিল করুন", callback_data=f"cancel_custom_{user_id}_{encoded_query}_{original_admin_msg_id}")]
+            ])
+        )
+        # We might want to keep track of this cancel_prompt_msg.id too if we want to delete it later
+        # For simplicity, we are not storing it in custom_message_prompts as that's for the force_reply itself.
+        asyncio.create_task(delete_message_later(cancel_prompt_msg.chat.id, cancel_prompt_msg.id, delay=600)) # Delete after a longer time
 
     elif data.startswith("cancel_custom_"):
         parts = data.split("_", 4)
@@ -953,20 +963,22 @@ async def callback_handler(_, cq: CallbackQuery):
 @app.on_message(filters.private & filters.user(ADMIN_IDS) & filters.reply & filters.text & ~filters.command)
 async def handle_admin_custom_message(_, msg: Message):
     admin_id = msg.from_user.id
+    
+    # Ensure msg.reply_to_message is not None and has an ID
+    if not msg.reply_to_message or not msg.reply_to_message.id:
+        print(f"DEBUG: Message from admin {admin_id} is a reply but reply_to_message is invalid. Ignoring.")
+        return
+
     replied_to_message_id = msg.reply_to_message.id
 
     print(f"DEBUG: handle_admin_custom_message triggered for admin {admin_id}. Message: '{msg.text}'")
     print(f"DEBUG: Replied to message ID: {replied_to_message_id}")
 
     # Check if the message is a reply to our custom message prompt
-    if replied_to_message_id not in custom_message_prompts.values():
-        print(f"DEBUG: Replied message ID {replied_to_message_id} is not a custom message prompt. Ignoring.")
-        return # Not a reply to our specific prompt, ignore.
-
-    # Ensure this admin is the one who was sent the prompt
+    # We check both value and key here to ensure it's the correct prompt for this admin
     if custom_message_prompts.get(admin_id) != replied_to_message_id:
-        print(f"DEBUG: Admin {admin_id} is replying to a custom message prompt, but it's not their active one. Ignoring.")
-        return # This means another admin might be replying, or an old prompt.
+        print(f"DEBUG: Replied message ID {replied_to_message_id} is not the active custom message prompt for admin {admin_id}. Ignoring.")
+        return # Not a reply to our specific prompt for this admin, ignore.
 
     custom_data = custom_message_data.get(admin_id)
     if not custom_data:
