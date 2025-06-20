@@ -71,7 +71,7 @@ Thread(target=lambda: flask_app.run(host="0.0.0.0", port=8080)).start()
 thread_pool_executor = ThreadPoolExecutor(max_workers=5)
 
 # Global dictionaries to store temporary data for custom messages
-custom_message_data = {}  # Format: {admin_id: {"target_user_id": user_id, "query": original_query}}
+custom_message_data = {}  # Format: {admin_id: {"target_user_id": user_id, "query": original_query, "original_admin_msg_id": msg_id_of_noresult_prompt}}
 custom_message_prompts = {}  # Format: {admin_id: prompt_message_id}
 
 # Helpers
@@ -311,7 +311,7 @@ async def delete_specific_movie(_, msg: Message):
 
     if movie_to_delete:
         movies_col.delete_one({"_id": movie_to_delete["_id"]})
-        reply_msg = await msg.reply(f"মুভি **{movie_to_to_delete['title']}** সফলভাবে ডিলিট করা হয়েছে।")
+        reply_msg = await msg.reply(f"মুভি **{movie_to_delete['title']}** সফলভাবে ডিলিট করা হয়েছে।")
         asyncio.create_task(delete_message_later(reply_msg.chat.id, reply_msg.id))
     else:
         error_msg = await msg.reply(f"**{movie_title_to_delete}** নামের কোনো মুভি খুঁজে পাওয়া যায়নি।")
@@ -594,7 +594,7 @@ async def search(_, msg: Message):
                 InlineKeyboardButton("🚀 শিগগির আসবে", callback_data=f"noresult_coming_{user_id}_{encoded_query}")
             ],
             [
-                InlineKeyboardButton("✏️ কাস্টম মেসেজ পাঠান", callback_data=f"noresult_custom_{user_id}_{encoded_query}")
+                InlineKeyboardButton("✏️ কাস্টম মেসেজ পাঠান", callback_data=f"noresult_custom_{user_id}_{encoded_query}_{msg.id}") # Added msg.id here
             ]
         ])
 
@@ -814,22 +814,25 @@ async def callback_handler(_, cq: CallbackQuery):
             await cq.answer("ফেভারিট আপডেট করতে সমস্যা হয়েছে।", show_alert=True)
 
     elif data.startswith("noresult_custom_"):
-        parts = data.split("_", 3)
+        parts = data.split("_", 4) # Split by 4 to get original admin msg ID
         user_id = int(parts[2])
         encoded_query = parts[3]
+        original_admin_msg_id = int(parts[4]) # Get the original admin message ID
         original_query = urllib.parse.unquote_plus(encoded_query)
 
-        # Store the user ID and query in a temporary dictionary for later use
+        # Store the user ID, query, and original admin message ID in a temporary dictionary for later use
         custom_message_data[cq.from_user.id] = {
             "target_user_id": user_id,
-            "query": original_query
+            "query": original_query,
+            "original_admin_msg_id": original_admin_msg_id
         }
+        print(f"DEBUG: custom_message_data set for admin {cq.from_user.id}: {custom_message_data[cq.from_user.id]}")
 
         # Edit the admin's original message to show that custom message is being handled
         await cq.message.edit_reply_markup(
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("✏️ কাস্টম মেসেজ পাঠানো হচ্ছে...", callback_data="noop")],
-                [InlineKeyboardButton("❌ বাতিল করুন", callback_data=f"cancel_custom_{user_id}_{encoded_query}")]
+                [InlineKeyboardButton("❌ বাতিল করুন", callback_data=f"cancel_custom_{user_id}_{encoded_query}_{original_admin_msg_id}")] # Pass original_admin_msg_id
             ])
         )
 
@@ -837,22 +840,25 @@ async def callback_handler(_, cq: CallbackQuery):
             cq.from_user.id,
             f"✏️ অনুগ্রহ করে {user_id} ইউজারকে পাঠানোর জন্য আপনার কাস্টম মেসেজটি লিখুন:",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("❌ বাতিল করুন", callback_data=f"cancel_custom_{user_id}_{encoded_query}")]
+                [InlineKeyboardButton("❌ বাতিল করুন", callback_data=f"cancel_custom_{user_id}_{encoded_query}_{original_admin_msg_id}")] # Pass original_admin_msg_id
             ])
         )
 
         custom_message_prompts[cq.from_user.id] = prompt_msg.id
+        print(f"DEBUG: custom_message_prompts set for admin {cq.from_user.id}: {custom_message_prompts[cq.from_user.id]}")
         await cq.answer("কাস্টম মেসেজ লেখার জন্য অপেক্ষা করছি...", show_alert=True)
 
     elif data.startswith("cancel_custom_"):
-        parts = data.split("_", 3)
+        parts = data.split("_", 4) # Split by 4 to get original admin msg ID
         user_id_for_revert = int(parts[2])
         encoded_query_for_revert = parts[3]
+        original_admin_msg_id = int(parts[4]) # Get original admin message ID
 
         # Clean up temporary data
         custom_message_data.pop(cq.from_user.id, None)
         if cq.from_user.id in custom_message_prompts:
             try:
+                # Delete the prompt message sent to admin
                 await app.delete_messages(cq.message.chat.id, custom_message_prompts[cq.from_user.id])
             except Exception as e:
                 print(f"Error deleting prompt message: {e}")
@@ -869,13 +875,18 @@ async def callback_handler(_, cq: CallbackQuery):
                 InlineKeyboardButton("🚀 শিগগির আসবে", callback_data=f"noresult_coming_{user_id_for_revert}_{encoded_query_for_revert}")
             ],
             [
-                InlineKeyboardButton("✏️ কাস্টম মেসেজ পাঠান", callback_data=f"noresult_custom_{user_id_for_revert}_{encoded_query_for_revert}")
+                InlineKeyboardButton("✏️ কাস্টম মেসেজ পাঠান", callback_data=f"noresult_custom_{user_id_for_revert}_{encoded_query_for_revert}_{original_admin_msg_id}") # Ensure original_admin_msg_id is preserved
             ]
         ])
         try:
-            await cq.message.edit_reply_markup(reply_markup=admin_btns_revert)
+            # Edit the original message that triggered the custom message prompt
+            await app.edit_message_reply_markup(
+                chat_id=cq.message.chat.id, # This should be the admin's chat ID
+                message_id=original_admin_msg_id, # Use the stored original_admin_msg_id
+                reply_markup=admin_btns_revert
+            )
         except Exception as e:
-            print(f"Error reverting admin message markup: {e}")
+            print(f"Error reverting admin message markup (original): {e}")
 
         await cq.answer("কাস্টম মেসেজ বাতিল করা হয়েছে।", show_alert=True)
 
@@ -930,13 +941,19 @@ async def callback_handler(_, cq: CallbackQuery):
                 await cq.answer("অকার্যকর কলব্যাক ডেটা।", show_alert=True)
 
 
-@app.on_message(filters.user(ADMIN_IDS) & filters.private & filters.text & ~filters.me & ~filters.regex(r"^\/"))
+@app.on_message(filters.user(ADMIN_IDS) & filters.private & filters.text & (lambda _, __, msg: not msg.text.startswith('/')))
 async def handle_admin_custom_message(_, msg: Message):
+    admin_id = msg.from_user.id
+    print(f"DEBUG: handle_admin_custom_message triggered for admin {admin_id}. Message: '{msg.text}'")
+    print(f"DEBUG: custom_message_data for admin: {custom_message_data.get(admin_id)}")
+    print(f"DEBUG: custom_message_prompts for admin: {custom_message_prompts.get(admin_id)}")
+
     # Check if this admin was prompted to send a custom message
-    if msg.from_user.id in custom_message_data and msg.from_user.id in custom_message_prompts:
-        target_user_id = custom_message_data[msg.from_user.id]["target_user_id"]
-        original_query = custom_message_data[msg.from_user.id]["query"]
-        
+    if admin_id in custom_message_data and admin_id in custom_message_prompts:
+        target_user_id = custom_message_data[admin_id]["target_user_id"]
+        original_query = custom_message_data[admin_id]["query"]
+        original_admin_msg_id = custom_message_data[admin_id]["original_admin_msg_id"]
+
         try:
             # Send the custom message to the target user
             sent_to_user = await app.send_message(
@@ -950,20 +967,39 @@ async def handle_admin_custom_message(_, msg: Message):
             admin_confirmation_msg = await msg.reply(f"✅ মেসেজ সফলভাবে {target_user_id} ইউজারকে পাঠানো হয়েছে।")
             asyncio.create_task(delete_message_later(admin_confirmation_msg.chat.id, admin_confirmation_msg.id))
             
-            # Clean up the prompt message
+            # Clean up the prompt message sent to admin
             try:
-                prompt_msg_id = custom_message_prompts[msg.from_user.id]
+                prompt_msg_id = custom_message_prompts[admin_id]
                 await app.delete_messages(msg.chat.id, prompt_msg_id)
             except Exception as e:
                 print(f"Error deleting admin prompt message: {e}")
-            
+
+            # Update the original admin's 'no result' message buttons
+            admin_btns_final = InlineKeyboardMarkup([
+                [InlineKeyboardButton(f"✅ উত্তর দেওয়া হয়েছে: কাস্টম মেসেজ", callback_data="noop")]
+            ])
+            try:
+                await app.edit_message_reply_markup(
+                    chat_id=msg.chat.id, # Admin's chat ID
+                    message_id=original_admin_msg_id, # Use the stored original admin message ID
+                    reply_markup=admin_btns_final
+                )
+            except Exception as e:
+                print(f"Error updating original admin message markup: {e}")
+
         except Exception as e:
             error_reply = await msg.reply(f"❌ ইউজারকে মেসেজ পাঠাতে সমস্যা হয়েছে: {e}")
             asyncio.create_task(delete_message_later(error_reply.chat.id, error_reply.id))
         
         # Remove temporary data regardless of success or failure
-        custom_message_data.pop(msg.from_user.id, None)
-        custom_message_prompts.pop(msg.from_user.id, None)
+        custom_message_data.pop(admin_id, None)
+        custom_message_prompts.pop(admin_id, None)
+    else:
+        print(f"DEBUG: Admin {admin_id} sent a text message, but not in a custom message context. Ignoring.")
+        # Optionally, you can add a generic response here if you want to acknowledge other admin messages
+        # generic_ack = await msg.reply("এই মেসেজটি কোনো কাস্টম মেসেজ প্রম্পট এর অংশ নয়।")
+        # asyncio.create_task(delete_message_later(generic_ack.chat.id, generic_ack.id, delay=10))
+
 
 if __name__ == "__main__":
     print("বট শুরু হচ্ছে...")
