@@ -1,0 +1,6 @@
+pyrogram
+pymongo
+Flask
+fuzzywuzzy
+python-Levenshtein
+tgcrypto
