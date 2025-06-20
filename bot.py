@@ -11,7 +11,7 @@ from fuzzywuzzy import process
 from flask import Flask
 from threading import Thread
 
-# Config
+# Config from environment
 API_ID = int(os.getenv("API_ID", 12345))
 API_HASH = os.getenv("API_HASH", "your_api_hash_here")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "your_bot_token_here")
@@ -21,11 +21,12 @@ DATABASE_URL = os.getenv("DATABASE_URL", "mongodb://localhost:27017")
 START_PIC = os.getenv("START_PIC", "https://placehold.co/600x400")
 RESULTS_COUNT = int(os.getenv("RESULTS_COUNT", 10))
 
-# Initialize
+# Pyrogram Client
 app = Client("movie_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+
+# MongoDB Connection
 mongo = MongoClient(DATABASE_URL)
 db = mongo["movie_bot_v2"]
-
 movies_col = db["movies"]
 users_col = db["users"]
 
@@ -43,6 +44,7 @@ async def delete_message_later(chat_id: int, message_id: int, delay: int = 300):
     except:
         pass
 
+# Language Support
 LANGUAGES = {
     "en": {
         "welcome": "🎬 Welcome to Movie Bot!\n\nSend me a movie name to search.",
@@ -60,6 +62,7 @@ LANGUAGES = {
     }
 }
 
+# Start command
 @app.on_message(filters.command("start"))
 async def start_cmd(_, message: Message):
     uid = message.from_user.id
@@ -90,7 +93,8 @@ async def start_cmd(_, message: Message):
         reply_markup=InlineKeyboardMarkup(buttons)
     )
 
-@app.on_message(filters.text & ~filters.command())
+# Text search handler (excluding commands)
+@app.on_message(filters.text & ~filters.regex(r"^/"))
 async def search_handler(_, message: Message):
     q = message.text.strip()
     uid = message.from_user.id
@@ -137,6 +141,7 @@ async def search_handler(_, message: Message):
         await status.edit_text(f"Error: {e}")
         await delete_message_later(message.chat.id, status.id)
 
+# Callback Handler
 @app.on_callback_query()
 async def cb_handler(_, callback: CallbackQuery):
     data = callback.data
@@ -163,10 +168,11 @@ async def cb_handler(_, callback: CallbackQuery):
 # Flask Health Check
 flask_app = Flask(__name__)
 @flask_app.route("/")
-def home(): return "Movie Bot Running!"
+def home(): return "✅ Movie Bot Running"
 
 def run_flask(): flask_app.run(host="0.0.0.0", port=8080)
 
+# Run bot
 if __name__ == "__main__":
     Thread(target=run_flask, daemon=True).start()
     print("🚀 Movie Bot Started")
