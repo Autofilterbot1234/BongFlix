@@ -1,4 +1,3 @@
-# bot.py
 import os
 import re
 import asyncio
@@ -11,29 +10,25 @@ from fuzzywuzzy import process
 from flask import Flask
 from threading import Thread
 
-# Config from environment
+# Config
 API_ID = int(os.getenv("API_ID", 12345))
-API_HASH = os.getenv("API_HASH", "your_api_hash_here")
-BOT_TOKEN = os.getenv("BOT_TOKEN", "your_bot_token_here")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID", -10012345678))
+API_HASH = os.getenv("API_HASH", "your_api_hash")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "your_bot_token")
+CHANNEL_ID = int(os.getenv("CHANNEL_ID", -1001234567890))
 ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "123456789").split(",")))
 DATABASE_URL = os.getenv("DATABASE_URL", "mongodb://localhost:27017")
-START_PIC = os.getenv("START_PIC", "https://placehold.co/600x400")
+START_PIC = os.getenv("START_PIC", "https://i.imgur.com/X7e5P07.jpeg")
 RESULTS_COUNT = int(os.getenv("RESULTS_COUNT", 10))
 
-# Pyrogram Client
+# Init
 app = Client("movie_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
-
-# MongoDB Connection
 mongo = MongoClient(DATABASE_URL)
 db = mongo["movie_bot_v2"]
 movies_col = db["movies"]
 users_col = db["users"]
 
-# Indexing
 movies_col.create_index([("title_clean", ASCENDING)], background=True)
 
-# Utils
 def clean_text(text: str) -> str:
     return re.sub(r'[^\w]', '', text.lower(), flags=re.UNICODE)
 
@@ -44,7 +39,6 @@ async def delete_message_later(chat_id: int, message_id: int, delay: int = 300):
     except:
         pass
 
-# Language Support
 LANGUAGES = {
     "en": {
         "welcome": "🎬 Welcome to Movie Bot!\n\nSend me a movie name to search.",
@@ -62,7 +56,6 @@ LANGUAGES = {
     }
 }
 
-# Start command
 @app.on_message(filters.command("start"))
 async def start_cmd(_, message: Message):
     uid = message.from_user.id
@@ -87,18 +80,25 @@ async def start_cmd(_, message: Message):
     if uid in ADMIN_IDS:
         buttons.append([InlineKeyboardButton("🛠️ অ্যাডমিন", callback_data="admin_panel")])
 
-    await message.reply_photo(
-        photo=START_PIC,
-        caption=LANGUAGES[lang]["welcome"],
-        reply_markup=InlineKeyboardMarkup(buttons)
-    )
+    try:
+        await message.reply_photo(
+            photo=START_PIC,
+            caption=LANGUAGES[lang]["welcome"],
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
+    except Exception as e:
+        print(f"[START_PIC ERROR] {e}")
+        await message.reply_text(
+            text=LANGUAGES[lang]["welcome"],
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
 
-# Text search handler (excluding commands)
 @app.on_message(filters.text & ~filters.regex(r"^/"))
 async def search_handler(_, message: Message):
     q = message.text.strip()
     uid = message.from_user.id
-    if len(q) < 3: return
+    if len(q) < 3:
+        return
 
     lang_doc = users_col.find_one({"_id": uid}, {"language": 1}) or {}
     lang = lang_doc.get("language", "bn")
@@ -141,7 +141,6 @@ async def search_handler(_, message: Message):
         await status.edit_text(f"Error: {e}")
         await delete_message_later(message.chat.id, status.id)
 
-# Callback Handler
 @app.on_callback_query()
 async def cb_handler(_, callback: CallbackQuery):
     data = callback.data
@@ -165,14 +164,15 @@ async def cb_handler(_, callback: CallbackQuery):
         except Exception as e:
             await callback.answer(f"Error: {e}", show_alert=True)
 
-# Flask Health Check
+# Flask health check
 flask_app = Flask(__name__)
 @flask_app.route("/")
-def home(): return "✅ Movie Bot Running"
+def home():
+    return "✅ Bot is running!"
 
-def run_flask(): flask_app.run(host="0.0.0.0", port=8080)
+def run_flask():
+    flask_app.run(host="0.0.0.0", port=8080)
 
-# Run bot
 if __name__ == "__main__":
     Thread(target=run_flask, daemon=True).start()
     print("🚀 Movie Bot Started")
